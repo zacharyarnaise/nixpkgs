@@ -14,6 +14,7 @@ let
   xEnv = config.systemd.services.display-manager.environment;
 
   ly = cfg.package.override { x11Support = cfg.x11Support; };
+  kmscon = config.services.kmscon.package;
 
   iniFmt = pkgs.formats.iniWithGlobalSection { };
 
@@ -60,11 +61,21 @@ let
 
   cfgFile = iniFmt.generate "config.ini" { globalSection = finalConfig; };
 
+  lyCommand = "${lib.getExe ly}${lib.optionalString cfg.useKmscon " --use-kmscon-vt"}";
+
+  displayManagerCommand =
+    if cfg.useKmscon then
+      "exec ${lib.getExe kmscon} --vt=tty${toString finalConfig.tty} --no-switchvt --no-libseat --login -- ${lyCommand}"
+    else
+      "exec ${lyCommand}";
+
 in
 {
   options = {
     services.displayManager.ly = {
       enable = mkEnableOption "ly as the display manager";
+      useKmscon = mkEnableOption "running Ly inside kmscon";
+
       x11Support = mkOption {
         description = "Whether to enable support for X11";
         type = lib.types.bool;
@@ -190,7 +201,7 @@ in
 
     environment = {
       etc."ly/config.ini".source = cfgFile;
-      systemPackages = [ ly ];
+      systemPackages = [ ly ] ++ lib.optional cfg.useKmscon kmscon;
 
       pathsToLink = [ "/share/ly" ];
     };
@@ -202,7 +213,7 @@ in
         enable = true;
         generic = {
           enable = true;
-          execCmd = "exec /run/current-system/sw/bin/ly";
+          execCmd = displayManagerCommand;
         };
 
         # Set this here instead of 'defaultConfig' so users get eval
@@ -225,12 +236,19 @@ in
           "plymouth-quit-wait.service"
         ];
 
+        environment = lib.mkIf cfg.useKmscon {
+          XKB_CONFIG_ROOT = config.services.xserver.xkb.dir;
+        };
+
         serviceConfig = {
           Type = "idle";
           StandardInput = "tty";
           TTYPath = "/dev/tty${toString finalConfig.tty}";
           TTYReset = "yes";
           TTYVHangup = "yes";
+        }
+        // optionalAttrs cfg.useKmscon {
+          TTYVTDisallocate = "yes";
         };
       };
     };
